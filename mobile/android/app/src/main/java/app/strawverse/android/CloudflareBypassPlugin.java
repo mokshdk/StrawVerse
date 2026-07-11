@@ -280,7 +280,19 @@ public class CloudflareBypassPlugin extends Plugin {
             String host = uri.getHost();
             String origin = uri.getScheme() + "://" + uri.getAuthority() + "/";
             CookieManager cookieManager = CookieManager.getInstance();
-            String[] names = {"cf_clearance", "cf_chl_rc_ni", "cf_chl_rc_i", "cf_chl_rc_m"};
+            java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+            String currentCookies = cookieManager.getCookie(url);
+            if (currentCookies != null) {
+                for (String pair : currentCookies.split(";")) {
+                    int separator = pair.indexOf('=');
+                    if (separator > 0) names.add(pair.substring(0, separator).trim());
+                }
+            }
+            names.add("cf_clearance");
+            names.add("cf_chl_rc_ni");
+            names.add("cf_chl_rc_i");
+            names.add("cf_chl_rc_m");
+
             for (String name : names) {
                 cookieManager.setCookie(origin, name + "=; Max-Age=0; Path=/; Secure; SameSite=None");
                 if (host != null) {
@@ -291,7 +303,7 @@ public class CloudflareBypassPlugin extends Plugin {
                 }
             }
             cookieManager.flush();
-            Log.i("StrawVerseBypass", "Expired stale Cloudflare cookies for host: " + host);
+            Log.i("StrawVerseBypass", "Expired failed session cookies for host: " + host + " names=" + names);
         } catch (Exception e) {
             Log.w("StrawVerseBypass", "Unable to expire stale Cloudflare cookies", e);
         }

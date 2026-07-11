@@ -367,9 +367,12 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
     const domain = normalizeHostname(new URL(targetUrl).hostname).toLowerCase();
 
     try {
+      // The provider rejected this session. Remove every cookie scoped to the
+      // failed host before opening the bypass browser; retaining non-CF session
+      // cookies can cause the replacement clearance to be rejected again.
       run(
-        "DELETE FROM cookie WHERE id IN (?, ?) OR ((name IN ('cf_clearance', 'cf_user_agent') OR name LIKE 'sec-ch-ua%') AND (? = domain OR ? LIKE '%.' || domain))",
-        [`${domain}-cf_clearance`, `${domain}-cf-user-agent`, domain, domain],
+        "DELETE FROM cookie WHERE ? = domain OR ? LIKE '%.' || domain OR domain LIKE '%.' || ?",
+        [domain, domain, domain],
       );
       if (global.clearCookieCache) {
         global.clearCookieCache(domain);
