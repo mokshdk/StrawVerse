@@ -124,6 +124,8 @@ function getHeaders(url, method = "GET") {
 
   const headers = {
     "User-Agent": userAgent,
+    Accept: "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
   };
 
   // Load Client Hints if bypassed

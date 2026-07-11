@@ -59,7 +59,8 @@ public class CloudflareBypassPlugin extends Plugin {
             @Override
             public void run() {
                 try {
-                    CookieManager.getInstance().removeAllCookies(null);
+                    // Keep the shared WebView cookie jar intact. Provider sessions are host-scoped,
+                    // and globally clearing it breaks unrelated manga/anime extensions.
                     CookieManager.getInstance().flush();
 
                     Log.i("StrawVerseBypass", "Running UI Thread for dialog creation");
@@ -250,14 +251,9 @@ public class CloudflareBypassPlugin extends Plugin {
                     });
 
                     Log.i("StrawVerseBypass", "Loading challenge URL in WebView and showing Dialog");
-                    CookieManager.getInstance().removeAllCookies(new android.webkit.ValueCallback<Boolean>() {
-                        @Override
-                        public void onReceiveValue(Boolean value) {
-                            webView.loadUrl(finalChallengeUrl);
-                            dialog.show();
-                            handler.post(cookiePoller);
-                        }
-                    });
+                    webView.loadUrl(finalChallengeUrl);
+                    dialog.show();
+                    handler.post(cookiePoller);
 
                 } catch (Exception e) {
                     Log.e("StrawVerseBypass", "Error building dialog", e);
@@ -350,7 +346,7 @@ public class CloudflareBypassPlugin extends Plugin {
             public void run() {
                 final Bundle headersBundle = new Bundle();
                 try {
-                    String localApiUrl = "http://127.0.0.1:3459/api/proxy-headers?url=" + java.net.URLEncoder.encode(videoUrl, "UTF-8");
+                    String localApiUrl = "http://127.0.0.1:3459/api/proxy-headers?method=GET&url=" + java.net.URLEncoder.encode(videoUrl, "UTF-8");
                     java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(localApiUrl).openConnection();
                     conn.setRequestMethod("GET");
                     conn.setConnectTimeout(2000);
@@ -395,6 +391,39 @@ public class CloudflareBypassPlugin extends Plugin {
         }).start();
     }
 
+    private static String mergeCookies(String explicitCookies, String browserCookies) {
+        java.util.LinkedHashMap<String, String> merged = new java.util.LinkedHashMap<>();
+        addCookies(merged, explicitCookies);
+        // Browser-issued values must win because Cloudflare binds them to this WebView session.
+        addCookies(merged, browserCookies);
+        StringBuilder result = new StringBuilder();
+        for (Map.Entry<String, String> cookie : merged.entrySet()) {
+            if (result.length() > 0) result.append("; ");
+            result.append(cookie.getKey()).append("=").append(cookie.getValue());
+        }
+        return result.toString();
+    }
+
+    private static void addCookies(java.util.LinkedHashMap<String, String> target, String cookieString) {
+        if (cookieString == null || cookieString.trim().isEmpty()) return;
+        for (String pair : cookieString.split(";")) {
+            int separator = pair.indexOf('=');
+            if (separator <= 0) continue;
+            String name = pair.substring(0, separator).trim();
+            String value = pair.substring(separator + 1).trim();
+            if (!name.isEmpty()) target.put(name, value);
+        }
+    }
+
+    private static String cookieNames(String cookieString) {
+        java.util.ArrayList<String> names = new java.util.ArrayList<>();
+        for (String pair : cookieString.split(";")) {
+            int separator = pair.indexOf('=');
+            if (separator > 0) names.add(pair.substring(0, separator).trim());
+        }
+        return names.toString();
+    }
+
     @PluginMethod
     public void nativeRequest(final PluginCall call) {
         new Thread(new Runnable() {
@@ -413,27 +442,36 @@ public class CloudflareBypassPlugin extends Plugin {
                     conn.setConnectTimeout(15000);
                     conn.setReadTimeout(15000);
 
-                    // Set headers (ensure we override the User-Agent to match WebView's user agent)
                     String webViewUA = android.webkit.WebSettings.getDefaultUserAgent(getContext());
                     boolean hasUA = false;
+                    String explicitCookies = null;
                     if (headers != null) {
                         java.util.Iterator<String> keys = headers.keys();
                         while (keys.hasNext()) {
                             String key = keys.next();
                             String value = headers.getString(key);
-                            if (key.equalsIgnoreCase("user-agent")) {
-                                hasUA = true;
-                            }
-                            if (key.equalsIgnoreCase("accept-encoding")) {
+                            if (key.equalsIgnoreCase("user-agent")) hasUA = true;
+                            if (key.equalsIgnoreCase("cookie")) {
+                                explicitCookies = value;
                                 continue;
                             }
+                            if (key.equalsIgnoreCase("accept-encoding")) continue;
                             conn.setRequestProperty(key, value);
-                            Log.i("StrawVerseBypass", "  Request Header: " + key + " = " + value);
                         }
                     }
-                    if (!hasUA) {
-                        conn.setRequestProperty("User-Agent", webViewUA);
-                        Log.i("StrawVerseBypass", "  Request Header (Added): User-Agent = " + webViewUA);
+                    if (!hasUA) conn.setRequestProperty("User-Agent", webViewUA);
+                    if (conn.getRequestProperty("Accept") == null) {
+                        conn.setRequestProperty("Accept", "*/*");
+                    }
+                    if (conn.getRequestProperty("Accept-Language") == null) {
+                        conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+                    }
+
+                    String browserCookies = CookieManager.getInstance().getCookie(url);
+                    String mergedCookies = mergeCookies(explicitCookies, browserCookies);
+                    if (!mergedCookies.isEmpty()) {
+                        conn.setRequestProperty("Cookie", mergedCookies);
+                        Log.i("StrawVerseBypass", "nativeRequest cookies: " + cookieNames(mergedCookies));
                     }
 
                     // Set body if POST/PUT
@@ -471,14 +509,21 @@ public class CloudflareBypassPlugin extends Plugin {
 
                     String base64Data = android.util.Base64.encodeToString(responseBytes, android.util.Base64.NO_WRAP);
 
-                    // Get response headers
+                    // Feed every response cookie back into the WebView jar so the browser and
+                    // native transports share the same host-scoped session.
                     JSObject resHeaders = new JSObject();
                     for (java.util.Map.Entry<String, java.util.List<String>> entries : conn.getHeaderFields().entrySet()) {
                         String key = entries.getKey();
                         if (key != null) {
                             resHeaders.put(key, String.join(", ", entries.getValue()));
+                            if (key.equalsIgnoreCase("set-cookie")) {
+                                for (String setCookie : entries.getValue()) {
+                                    CookieManager.getInstance().setCookie(url, setCookie);
+                                }
+                            }
                         }
                     }
+                    CookieManager.getInstance().flush();
 
                     JSObject ret = new JSObject();
                     ret.put("status", responseCode);
