@@ -205,10 +205,13 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
     return { ok: false, success: false, reason: "timeout" };
   });
 
-  ipcMain.handle("save-cf-cookies", async (event, targetUrl, cookieString) => {
-    if (!cookieString || !targetUrl) return { ok: false };
+  ipcMain.handle(
+    "save-cf-cookies",
+    async (event, targetUrl, cookieString, userAgent) => {
+    if (!cookieString || !targetUrl || !userAgent) return { ok: false };
     const domain = new URL(targetUrl).hostname.replace("www.", "");
     const pairs = cookieString.split(";");
+    let savedClearance = false;
     for (const pair of pairs) {
       const parts = pair.trim().split("=");
       if (parts.length >= 2) {
@@ -238,6 +241,19 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
               expiry,
               Date.now(),
             ]);
+            run(upsertSql, [
+              `${domain}-cf-user-agent`,
+              userAgent,
+              "cf_user_agent",
+              domain,
+              targetUrl,
+              "/",
+              "true",
+              "false",
+              expiry,
+              Date.now(),
+            ]);
+            savedClearance = true;
             if (global.clearCookieCache) {
               global.clearCookieCache(domain);
             }
@@ -247,7 +263,7 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
         }
       }
     }
-    return { ok: true };
+    return { ok: savedClearance };
   });
 
   global.cloudflarebypass = async (targetUrl, silent, referer, userAgent) => {
@@ -256,8 +272,13 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
 
     try {
       run(
-        "DELETE FROM cookie WHERE id = ? OR (name = 'cf_clearance' AND (? = domain OR ? LIKE '%.' || domain))",
-        [`${domain}-cf_clearance`, domain, domain],
+        "DELETE FROM cookie WHERE id IN (?, ?) OR (name IN ('cf_clearance', 'cf_user_agent') AND (? = domain OR ? LIKE '%.' || domain))",
+        [
+          `${domain}-cf_clearance`,
+          `${domain}-cf-user-agent`,
+          domain,
+          domain,
+        ],
       );
       if (global.clearCookieCache) {
         global.clearCookieCache(domain);
@@ -279,7 +300,7 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
           "SELECT value FROM cookie WHERE id = ? OR (name = 'cf_clearance' AND (? = domain OR ? LIKE '%.' || domain)) ORDER BY CAST(expirationDate AS REAL) DESC LIMIT 1",
           [`${domain}-cf_clearance`, domain, domain],
         );
-        if (row) {
+        if (row?.value) {
           if (global.clearCookieCache) {
             global.clearCookieCache(domain);
           }
