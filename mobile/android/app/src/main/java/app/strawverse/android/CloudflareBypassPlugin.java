@@ -251,9 +251,20 @@ public class CloudflareBypassPlugin extends Plugin {
                     });
 
                     Log.i("StrawVerseBypass", "Loading challenge URL in WebView and showing Dialog");
-                    webView.loadUrl(finalChallengeUrl);
+                    // A 403 means the existing clearance is invalid even when it has not expired.
+                    // Remove only this host's Cloudflare cookies before polling; otherwise the
+                    // poller sees the stale value and closes the dialog before Chromium can solve
+                    // and replace it. Never clear the whole jar because other extensions use it.
+                    expireCloudflareCookies(finalChallengeUrl);
                     dialog.show();
-                    handler.post(cookiePoller);
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (finished[0]) return;
+                            webView.loadUrl(finalChallengeUrl);
+                            handler.postDelayed(cookiePoller, 500);
+                        }
+                    }, 100);
 
                 } catch (Exception e) {
                     Log.e("StrawVerseBypass", "Error building dialog", e);
@@ -261,6 +272,29 @@ public class CloudflareBypassPlugin extends Plugin {
                 }
             }
         });
+    }
+
+    private static void expireCloudflareCookies(String url) {
+        try {
+            Uri uri = Uri.parse(url);
+            String host = uri.getHost();
+            String origin = uri.getScheme() + "://" + uri.getAuthority() + "/";
+            CookieManager cookieManager = CookieManager.getInstance();
+            String[] names = {"cf_clearance", "cf_chl_rc_ni", "cf_chl_rc_i", "cf_chl_rc_m"};
+            for (String name : names) {
+                cookieManager.setCookie(origin, name + "=; Max-Age=0; Path=/; Secure; SameSite=None");
+                if (host != null) {
+                    cookieManager.setCookie(
+                        origin,
+                        name + "=; Max-Age=0; Domain=." + host + "; Path=/; Secure; SameSite=None"
+                    );
+                }
+            }
+            cookieManager.flush();
+            Log.i("StrawVerseBypass", "Expired stale Cloudflare cookies for host: " + host);
+        } catch (Exception e) {
+            Log.w("StrawVerseBypass", "Unable to expire stale Cloudflare cookies", e);
+        }
     }
 
     private Intent pendingInstallIntent = null;
