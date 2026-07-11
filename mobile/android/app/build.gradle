@@ -46,6 +46,23 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
+
+    // Chromium network stack (Chrome-like TLS/JA3 fingerprint) used to replay
+    // cf_clearance-bound requests so Cloudflare accepts them on Android. Shared
+    // by the Node scraper proxy and the Media3 player.
+    implementation "org.chromium.net:cronet-embedded:119.6045.31"
+
+    // Media3 ExoPlayer for reliable HLS playback, wired to a Cronet data source
+    // so streams behind Cloudflare pass the challenge with the right fingerprint.
+    implementation "androidx.media3:media3-exoplayer:1.4.1"
+    implementation "androidx.media3:media3-exoplayer-hls:1.4.1"
+    implementation "androidx.media3:media3-ui:1.4.1"
+    implementation("androidx.media3:media3-datasource-cronet:1.4.1") {
+        // We provide the engine via cronet-embedded above; avoid pulling the
+        // Play Services variant which would conflict / require GMS.
+        exclude group: 'com.google.android.gms', module: 'play-services-cronet'
+    }
+
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
