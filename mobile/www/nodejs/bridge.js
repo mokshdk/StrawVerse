@@ -235,15 +235,21 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
 
   ipcMain.handle("ensure-cf-bypass", async (event, targetUrl) => {
     if (!targetUrl) return { ok: true, success: true };
-    const domain = new URL(targetUrl).hostname.replace("www.", "");
+    const domain = normalizeHostname(new URL(targetUrl).hostname).toLowerCase();
     broadcast("cf-bypass-request", { url: targetUrl });
     for (let i = 0; i < 15; i++) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const row = queryOne(
-        "SELECT value FROM cookie WHERE id = ? OR (name = 'cf_clearance' AND (? = domain OR ? LIKE '%.' || domain)) ORDER BY CAST(expirationDate AS REAL) DESC LIMIT 1",
+        "SELECT value, expirationDate, local_saved_at FROM cookie WHERE id = ? OR (name = 'cf_clearance' AND (? = domain OR ? LIKE '%.' || domain)) ORDER BY CAST(expirationDate AS REAL) DESC LIMIT 1",
         [`${domain}-cf_clearance`, domain, domain],
       );
-      if (row) {
+      const now = Date.now();
+      const isCurrent =
+        row?.value &&
+        (Number(row.expirationDate) > now ||
+          (Number(row.local_saved_at) > 0 &&
+            now - Number(row.local_saved_at) < 2 * 60 * 60 * 1000));
+      if (isCurrent) {
         return { ok: true, success: true };
       }
     }
@@ -254,7 +260,7 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
     "save-cf-cookies",
     async (event, targetUrl, cookieString, userAgent, clientHints) => {
       if (!cookieString || !targetUrl) return { ok: false };
-      const domain = new URL(targetUrl).hostname.replace("www.", "");
+      const domain = normalizeHostname(new URL(targetUrl).hostname).toLowerCase();
       const pairs = cookieString.split(";");
       let savedClearance = false;
 
@@ -358,7 +364,7 @@ function registerMobileHandlers({ appVersion, repoSlug }) {
 
   global.cloudflarebypass = async (targetUrl, silent, referer, userAgent) => {
     if (!targetUrl) return;
-    const domain = new URL(targetUrl).hostname.replace("www.", "");
+    const domain = normalizeHostname(new URL(targetUrl).hostname).toLowerCase();
 
     try {
       run(
