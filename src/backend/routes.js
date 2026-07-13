@@ -2396,6 +2396,49 @@ router.post("/api/metadata/switch-provider", async (req, res) => {
   }
 });
 
+function imageResponseLooksLikeChallenge(response) {
+  if (!response) return false;
+
+  const status = Number(response.status);
+  const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+  if (status === 403 || status === 503) return true;
+  if (!contentType.includes("text/html")) return false;
+
+  const preview = Buffer.isBuffer(response.data)
+    ? response.data.subarray(0, 8192).toString("utf8").toLowerCase()
+    : String(response.data || "").slice(0, 8192).toLowerCase();
+
+  return [
+    "cloudflare",
+    "cf-challenge",
+    "challenge-platform",
+    "turnstile",
+    "captcha",
+    "just a moment",
+  ].some((signature) => preview.includes(signature));
+}
+
+function getImageRequestOptions(url) {
+  const headers = getHeaders(url);
+  return {
+    responseType: "arraybuffer",
+    headers: {
+      ...(headers.Referer ? { Referer: headers.Referer } : {}),
+      ...(headers["User-Agent"] ? { "User-Agent": headers["User-Agent"] } : {}),
+      ...(headers.Cookie ? { Cookie: headers.Cookie } : {}),
+    },
+  };
+}
+
+async function fetchProxiedImage(url) {
+  try {
+    return await global.axios.get(url, getImageRequestOptions(url));
+  } catch (error) {
+    if (error.response) return error.response;
+    throw error;
+  }
+}
+
 // Proxy for all Images
 router.get("/api/image", async (req, res) => {
   let decodedUrl = "";
@@ -2450,22 +2493,22 @@ router.get("/api/image", async (req, res) => {
       logger.error("Error reading from image cache: " + cacheErr.message);
     }
 
-    const resolvedHeaders = getHeaders(decodedUrl);
-    const options = {
-      responseType: "arraybuffer",
-      headers: {
-        ...(resolvedHeaders.Referer
-          ? { Referer: resolvedHeaders.Referer }
-          : {}),
-        ...(resolvedHeaders["User-Agent"]
-          ? { "User-Agent": resolvedHeaders["User-Agent"] }
-          : {}),
-        ...(resolvedHeaders.Cookie ? { Cookie: resolvedHeaders.Cookie } : {}),
-      },
-    };
-    let response = await global.axios.get(decodedUrl, options);
-    const contentType = response.headers["content-type"] || "image/jpeg";
+    let response = await fetchProxiedImage(decodedUrl);
 
+    if (imageResponseLooksLikeChallenge(response)) {
+      const referer = getHeaders(decodedUrl).Referer || null;
+      await global.cloudflarebypass(decodedUrl, true, referer);
+      response = await fetchProxiedImage(decodedUrl);
+    }
+
+    if (imageResponseLooksLikeChallenge(response)) {
+      return res.status(502).send("Image provider challenge was not cleared");
+    }
+    if (response.status < 200 || response.status >= 300) {
+      return res.status(response.status || 502).send("Image provider request failed");
+    }
+
+    const contentType = response.headers["content-type"] || "image/jpeg";
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.send(response.data);

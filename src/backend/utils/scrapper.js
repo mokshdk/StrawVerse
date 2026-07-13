@@ -40,6 +40,24 @@ function normalizeOrigin(value) {
   }
 }
 
+function getChallengeScope(hostname) {
+  const labels = normalizeHostname(hostname).split(".").filter(Boolean);
+  if (labels.length <= 2) return labels.join(".");
+
+  const secondLevelSuffixes = new Set([
+    "co.uk",
+    "com.au",
+    "com.br",
+    "com.cn",
+    "co.in",
+    "co.jp",
+    "co.nz",
+    "co.za",
+  ]);
+  const lastTwo = labels.slice(-2).join(".");
+  return labels.slice(secondLevelSuffixes.has(lastTwo) ? -3 : -2).join(".");
+}
+
 function getHeaderCaseInsensitive(headers, name) {
   const wanted = name.toLowerCase();
   const key = Object.keys(headers || {}).find(
@@ -391,7 +409,8 @@ global.cloudflarebypass = async (targetUrl, force = false, referer = null) => {
   if (!global.ScrapperWindow)
     throw new Error("Global ScrapperWindow is not initialized");
 
-  const domain = new URL(targetUrl).hostname.replace("www.", "");
+  const domain = normalizeHostname(new URL(targetUrl).hostname);
+  const challengeScope = getChallengeScope(domain);
 
   try {
     const row = queryOne(
@@ -416,9 +435,11 @@ global.cloudflarebypass = async (targetUrl, force = false, referer = null) => {
     console.error("Failed to check cookie expiration in DB:", e);
   }
 
-  if (activeBypasses[domain]) return activeBypasses[domain];
+  if (activeBypasses[challengeScope]) {
+    return activeBypasses[challengeScope];
+  }
 
-  activeBypasses[domain] = queueBypass(async () => {
+  const bypassPromise = queueBypass(async () => {
     global.IsBypassingCloudflare = true;
 
     try {
@@ -501,19 +522,21 @@ global.cloudflarebypass = async (targetUrl, force = false, referer = null) => {
         await sleep(1000);
       }
 
-      global.ScrapperWindow.hide();
-      global.ScrapperWindow.loadURL("about:blank").catch(() => {});
-
       await saveClearanceCookiesForDomain(domain);
+      global.ScrapperWindow.hide();
       global.ScrapperWindow.loadURL("about:blank").catch(() => {});
     } finally {
       global.IsBypassingCloudflare = false;
     }
   });
+
+  activeBypasses[challengeScope] = bypassPromise;
   try {
-    await activeBypasses[domain];
+    await bypassPromise;
   } finally {
-    delete activeBypasses[domain];
+    if (activeBypasses[challengeScope] === bypassPromise) {
+      delete activeBypasses[challengeScope];
+    }
   }
 };
 
