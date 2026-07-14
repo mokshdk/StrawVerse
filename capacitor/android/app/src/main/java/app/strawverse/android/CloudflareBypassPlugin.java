@@ -454,19 +454,14 @@ public class CloudflareBypassPlugin extends Plugin {
     @PluginMethod
     public void nativeRequest(final PluginCall call) {
         String url = call.getString("url");
+        // Cloudflare clearance is bound to the browser fingerprint that solved
+        // the challenge. Keep every request to a protected host—including
+        // images and other static resources—on the background WebView transport.
+        // Falling back to HttpURLConnection for static files causes a fresh 403
+        // even when the WebView cookie jar contains valid clearance cookies.
         if (url != null && (url.contains("animepahe") || url.contains("anikototv") || url.contains("megaplay") || url.contains("weebcentral") || url.contains("allmanga") || url.contains("anineko"))) {
-            boolean isStatic = url.contains("/uploads/") 
-                || url.endsWith(".webp") 
-                || url.endsWith(".png") 
-                || url.endsWith(".jpg") 
-                || url.endsWith(".jpeg") 
-                || url.endsWith(".gif")
-                || url.endsWith(".js")
-                || url.endsWith(".css");
-            if (!isStatic) {
-                executeWebViewRequest(url, call.getString("method"), call.getObject("headers"), call.getString("body"), call);
-                return;
-            }
+            executeWebViewRequest(url, call.getString("method"), call.getObject("headers"), call.getString("body"), call);
+            return;
         }
 
         new Thread(new Runnable() {
